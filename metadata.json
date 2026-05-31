@@ -1,0 +1,6 @@
+{
+  "name": "Firmware Extractor & Flasher",
+  "description": "Extract Android stock firmware, prepare update zip components, and simulate or automate the flashing process securely.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
