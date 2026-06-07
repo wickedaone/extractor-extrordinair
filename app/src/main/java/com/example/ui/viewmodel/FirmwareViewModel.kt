@@ -56,26 +56,6 @@ class FirmwareViewModel(application: Application) : AndroidViewModel(application
     private val _flashLogs = MutableStateFlow<List<FlashLog>>(emptyList())
     val flashLogs: StateFlow<List<FlashLog>> = _flashLogs.asStateFlow()
 
-    init {
-        viewModelScope.launch {
-            repo.allPackages.collectLatest { pkgs ->
-                if (pkgs.isEmpty()) {
-                    // Seed initial demo firmware packages for quick friction-free UI testing
-                    seedDemoPackages()
-                } else {
-                    _firmwarePackages.value = pkgs
-                }
-            }
-        }
-        viewModelScope.launch {
-            repo.allLogs.collectLatest { logs ->
-                _flashLogs.value = logs
-            }
-        }
-        // Load persistency data for Community swarm and Help board
-        loadP2PAndForumData()
-    }
-
     // --- Active states inside Firmware Unpacker (Extract Tab) ---
     private val _selectedPackage = MutableStateFlow<FirmwarePackage?>(null)
     val selectedPackage: StateFlow<FirmwarePackage?> = _selectedPackage.asStateFlow()
@@ -113,6 +93,12 @@ class FirmwareViewModel(application: Application) : AndroidViewModel(application
 
     private val _lastFlashingStatus = MutableStateFlow<FlashStatus?>(null)
     val lastFlashingStatus: StateFlow<FlashStatus?> = _lastFlashingStatus.asStateFlow()
+
+    private val _autoExtractBeforeFlash = MutableStateFlow(true)
+    val autoExtractBeforeFlash: StateFlow<Boolean> = _autoExtractBeforeFlash.asStateFlow()
+
+    private val _flashingActivePhase = MutableStateFlow("Initializing Flasher Sequence...")
+    val flashingActivePhase: StateFlow<String> = _flashingActivePhase.asStateFlow()
 
     // --- Gemini Support Panel (AI Co-Pilot Tab) ---
     private val _copilotMessages = MutableStateFlow<List<ChatMessage>>(listOf(
@@ -208,6 +194,26 @@ class FirmwareViewModel(application: Application) : AndroidViewModel(application
 
     private val _isExecutingToolkitCommand = MutableStateFlow(false)
     val isExecutingToolkitCommand: StateFlow<Boolean> = _isExecutingToolkitCommand.asStateFlow()
+
+    init {
+        viewModelScope.launch {
+            repo.allPackages.collectLatest { pkgs ->
+                if (pkgs.isEmpty()) {
+                    // Seed initial demo firmware packages for quick friction-free UI testing
+                    seedDemoPackages()
+                } else {
+                    _firmwarePackages.value = pkgs
+                }
+            }
+        }
+        viewModelScope.launch {
+            repo.allLogs.collectLatest { logs ->
+                _flashLogs.value = logs
+            }
+        }
+        // Load persistency data for Community swarm and Help board
+        loadP2PAndForumData()
+    }
 
     fun clearToolkitTerminal() {
         _toolkitConsoleLogs.value = listOf("📟 Ready. Awaiting ADB/Fastboot toolkit commands...")
@@ -505,20 +511,82 @@ class FirmwareViewModel(application: Application) : AndroidViewModel(application
 
         // Verify if we have extracted partitions before flashing
         val partitions = deserializePartitions(pkg.partitionsJson)
-        val extractedImages = partitions.filter { it.isExtracted }
-        if (extractedImages.isEmpty()) {
-            addFlashLogString("❌ ERROR: No unpacked image binaries (.img) found for ${pkg.name}. Enter \"Extract Manager\" tab to dump partition blocks first.")
-            return
-        }
+        var extractedImages = partitions.filter { it.isExtracted }
+        val needsAutoExtraction = extractedImages.isEmpty() && _autoExtractBeforeFlash.value
 
         _isFlashing.value = true
         _flashingProgress.value = 0f
-        addFlashLogString("⚡ Triggering Automated OS Flash Routine...")
-        addFlashLogString("📲 Target Device: ${devState.name} [Status: Serial verified]")
-        addFlashLogString("💿 Firmware: ${pkg.name} (${pkg.deviceModel})")
+        _flashingActivePhase.value = "Initializing Automation Pipeline..."
+        _flashingConsoleLogs.value = mutableListOf()
+        addFlashLogString("🚀 [ONE-CLICK PIPELINE] Initializing automated multi-stage flashing protocol...")
+        addFlashLogString("📲 Device Connection: ${devState.name}")
+        addFlashLogString("💿 Payload Targets: ${pkg.name}")
 
         viewModelScope.launch {
+            if (needsAutoExtraction) {
+                _flashingActivePhase.value = "Stage 1/2: Auto-Extracting ROM Blocks..."
+                addFlashLogString("\n📂 [STAGE 1: AUTO-EXTRACT] No pre-extracted .img binaries detected.")
+                addFlashLogString("⚡ Commencing background unpacking of selected partition elements...")
+                
+                // Get all partitions of this package
+                val partitionsToExtract = partitions.map { it.copy(isSelected = true) }
+                val totalBytesSelection = partitionsToExtract.sumOf { it.sizeBytes }
+                var totalExtractedBytes = 0L
+
+                for ((index, item) in partitionsToExtract.withIndex()) {
+                    addFlashLogString("──────────────────────────────────────")
+                    addFlashLogString("📦 Extracting block: `${item.name}` (${item.formattedSize})")
+                    
+                    val partitionSize = item.sizeBytes
+                    var chunkBytes = 0L
+                    val speedMb = kotlin.random.Random.nextInt(40, 75)
+
+                    val stepCount = 3
+                    val stepSize = partitionSize / stepCount
+                    
+                    for (step in 1..stepCount) {
+                        delay(250)
+                        chunkBytes += stepSize
+                        totalExtractedBytes += stepSize
+                        
+                        // We scale the progress bar for stage 1: it goes from 0.0 to 0.4
+                        val stage1Progress = (totalExtractedBytes.toFloat() / totalBytesSelection) * 0.4f
+                        _flashingProgress.value = stage1Progress
+
+                        val hexOffset = String.format("0x%08X", (stepCount * index + step) * 0x1E0000)
+                        addFlashLogString("  ├─ Block Offset $hexOffset: Decompressing chunk [${((chunkBytes.toFloat() / partitionSize) * 100).toInt()}%] at $speedMb MB/s")
+                    }
+
+                    addFlashLogString("  └─ Payload Hash Verified: SHA256 matches secure header profile")
+                }
+
+                addFlashLogString("──────────────────────────────────────")
+                addFlashLogString("🎉 [AUTO-EXTRACT COMPLETE] All selected partition images successfully prepared.")
+                
+                val fullyExtractedPartitions = partitions.map { it.copy(isExtracted = true, isSelected = true) }
+                val updatedJson = serializePartitions(fullyExtractedPartitions)
+                val updatedPkg = pkg.copy(
+                    partitionsJson = updatedJson,
+                    extractedCount = fullyExtractedPartitions.size,
+                    isExtracted = true
+                )
+                repo.updatePackage(updatedPkg)
+                _selectedPackage.value = updatedPkg
+                _activePartitions.value = fullyExtractedPartitions
+                
+                extractedImages = fullyExtractedPartitions
+                addFlashLogString("✨ Shifting context dynamically to Fastboot flashing sequence...")
+                delay(800)
+            } else if (extractedImages.isEmpty()) {
+                addFlashLogString("❌ ERROR: No unpacked image binaries (.img) found for ${pkg.name}.")
+                addFlashLogString("💡 TIP: Turn on \"One-Click Automated Sequence\" toggle or unpack in the \"Extract Manager\" tab first.")
+                _isFlashing.value = false
+                return@launch
+            }
+
+            _flashingActivePhase.value = "Stage 2/2: Flashing System Images..."
             val serial = "8A9X19280"
+            addFlashLogString("\n⚡ [STAGE 2: FASTBOOT FLASH] Triggering Fastboot stream...")
             addFlashLogString("$ fastboot devices")
             delay(400)
             addFlashLogString("$serial    fastboot")
@@ -528,7 +596,6 @@ class FirmwareViewModel(application: Application) : AndroidViewModel(application
             val codeModel = if (pkg.deviceModel.contains("Pixel")) "shiba" else "oneplus12"
             addFlashLogString("product: $codeModel\nFinished. Total time: 0.120s")
 
-            // Simulate partition blocks flashing sequence
             var flashErrorsOccurred = false
             var completedCount = 0
             val totalToFlash = extractedImages.size
@@ -537,17 +604,14 @@ class FirmwareViewModel(application: Application) : AndroidViewModel(application
                 addFlashLogString("──────────────────────────────────────")
                 addFlashLogString("$ fastboot flash ${part.name} ${part.name}.img")
                 
-                // Fastboot logs simulation
-                delay(700)
+                delay(400)
                 addFlashLogString("Sending '${part.name}' (${part.sizeBytes / 1024} KB) ...")
-                delay(1000)
+                delay(600)
                 val sendTime = 0.5 + kotlin.random.Random.nextDouble() * 1.3
                 addFlashLogString("Sending '${part.name}' ... OKAY [${String.format("%.2f", sendTime)}s]")
                 addFlashLogString("Writing '${part.name}' ...")
-                delay(800)
+                delay(500)
                 
-                // Introduce an occasional realistic bootloader error scenario if fastboot is locked or slot error (only if a specific random condition is met, otherwise succeed)
-                // Let's create an elegant way where users can test correct vs incorrect locks.
                 if (devState == DeviceState.FastbootLocked && part.name == "boot") {
                     addFlashLogString("FAILED (remote: 'Flashing is not allowed in Locked State')")
                     addFlashLogString("❌ CRITICAL FLASHER FAULT: Device bootloader locked. Command rejected.")
@@ -559,7 +623,9 @@ class FirmwareViewModel(application: Application) : AndroidViewModel(application
                 }
 
                 completedCount++
-                _flashingProgress.value = completedCount.toFloat() / totalToFlash
+                val progressStart = if (needsAutoExtraction) 0.4f else 0.0f
+                val progressRange = 1.0f - progressStart
+                _flashingProgress.value = progressStart + (completedCount.toFloat() / totalToFlash) * progressRange
             }
 
             if (flashErrorsOccurred) {
@@ -570,7 +636,7 @@ class FirmwareViewModel(application: Application) : AndroidViewModel(application
                 _showFlashResultDialog.value = true
                 
                 saveTransactionToHistory(
-                    pkg = pkg,
+                    pkg = _selectedPackage.value ?: pkg,
                     status = "FAILED",
                     logsCombined = _flashingConsoleLogs.value.joinToString("\n"),
                     err = "FAILED (remote: 'Flashing is not allowed in Locked State')"
@@ -588,12 +654,16 @@ class FirmwareViewModel(application: Application) : AndroidViewModel(application
                 _showFlashResultDialog.value = true
 
                 saveTransactionToHistory(
-                    pkg = pkg,
+                    pkg = _selectedPackage.value ?: pkg,
                     status = "SUCCESS",
                     logsCombined = _flashingConsoleLogs.value.joinToString("\n")
                 )
             }
         }
+    }
+
+    fun setAutoExtractBeforeFlash(enabled: Boolean) {
+        _autoExtractBeforeFlash.value = enabled
     }
 
     private fun addFlashLogString(message: String) {

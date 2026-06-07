@@ -954,6 +954,8 @@ fun AutoFlasherTab(
     val flashLogs by viewModel.flashingConsoleLogs.collectAsStateWithLifecycle()
     val showResultDialog by viewModel.showFlashResultDialog.collectAsStateWithLifecycle()
     val lastResultStatus by viewModel.lastFlashingStatus.collectAsStateWithLifecycle()
+    val autoExtractBeforeFlash by viewModel.autoExtractBeforeFlash.collectAsStateWithLifecycle()
+    val flashingActivePhase by viewModel.flashingActivePhase.collectAsStateWithLifecycle()
 
     if (showResultDialog) {
         AlertDialog(
@@ -1099,11 +1101,13 @@ fun AutoFlasherTab(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "Flashing System Components...",
+                            text = flashingActivePhase,
                             color = TechCyan,
                             fontWeight = FontWeight.Bold,
-                            fontSize = 13.sp
+                            fontSize = 13.sp,
+                            modifier = Modifier.weight(1f)
                         )
+                        Spacer(modifier = Modifier.width(8.dp))
                         Text(
                             text = "${(flashProgress * 100).toInt()}%",
                             color = TechCyan,
@@ -1123,31 +1127,81 @@ fun AutoFlasherTab(
                     )
                 }
             } else {
-                Button(
-                    onClick = {
-                        if (selectedPkg != null) {
-                            viewModel.startAutomatedFlashing(selectedPkg)
-                        }
-                    },
-                    enabled = selectedPkg != null && usbState !is DeviceState.Disconnected,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = TechCyan,
-                        disabledContainerColor = TechBorder
-                    ),
-                    shape = RoundedCornerShape(8.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("flash_firmware_btn")
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Icon(Icons.Default.OfflineBolt, contentDescription = "Flash Bolt")
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = when {
-                            selectedPkg == null -> "Select ROM Package First"
-                            usbState is DeviceState.Disconnected -> "Connect USB Cable First"
-                            else -> "Start Flashing Sequence"
+                    // Automated switch card
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = TechCardBg),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .border(1.dp, TechBorder, RoundedCornerShape(12.dp))
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "One-Click Automated Flow Sequence",
+                                    color = TechCyan,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 12.sp
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = "If partitions are not pre-unpacked in Extract Manager, DroidFlash will automatically decompress and verify all bin/img blocks in a sequential pipeline before flashing them over Fastboot.",
+                                    color = TechTextSecondary,
+                                    fontSize = 11.sp,
+                                    lineHeight = 14.sp
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Switch(
+                                checked = autoExtractBeforeFlash,
+                                onCheckedChange = { viewModel.setAutoExtractBeforeFlash(it) },
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = TechDarkBg,
+                                    checkedTrackColor = TechCyan,
+                                    uncheckedThumbColor = TechTextSecondary,
+                                    uncheckedTrackColor = TechCardBg,
+                                    uncheckedBorderColor = TechBorder
+                                )
+                            )
                         }
-                    )
+                    }
+
+                    Button(
+                        onClick = {
+                            if (selectedPkg != null) {
+                                viewModel.startAutomatedFlashing(selectedPkg)
+                            }
+                        },
+                        enabled = selectedPkg != null && usbState !is DeviceState.Disconnected,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = TechCyan,
+                            disabledContainerColor = TechBorder
+                        ),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp) // Maintain modern touch density minimum
+                            .testTag("flash_firmware_btn")
+                    ) {
+                        Icon(Icons.Default.OfflineBolt, contentDescription = "Flash Bolt")
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = when {
+                                selectedPkg == null -> "Select ROM Package First"
+                                usbState is DeviceState.Disconnected -> "Connect USB Cable First"
+                                else -> "Start Flashing Sequence"
+                            },
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
                 }
             }
         }
